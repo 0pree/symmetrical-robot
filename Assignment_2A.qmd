@@ -1,0 +1,183 @@
+---
+title: "Week 2 Assignment 2A - SQL and R: Movie Ratings"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction (Approach)
+
+The goal of this assignment is to collect movie ratings from at least five people on six movies, store the ratings in a SQL database, and analyze them in R. I created a survey covering six recent movies (Oppenheimer, F1, Sinners, One Battle After Another, Mickey 17, and Dead Man's Wire) and collected responses from 13 people. Not everyone had seen every movie, so the survey allowed "Did not watch" as a response option instead of forcing a rating.
+
+My plan is to load the raw survey export into R, clean it up (converting "Did not watch" into missing values rather than a low rating), reshape it from wide format into a tidy long format, and then load it into a normalized PostgreSQL database using three tables: `users`, `movies`, and `ratings`. From there I'll query the data back into R and calculate summary statistics.
+
+The first challenge is handling missing data properly. Since a rating of "Did not watch" isn't the same as a bad rating, I need to make sure it doesn't get treated as a 0 or get averaged in as if it were a real score. The second challenge is designing the database schema correctly, since ratings are a many-to-many relationship between users and movies and need a junction table rather than one flat table.
+
+## Loading and Cleaning the Data
+
+```{r}
+library(tidyverse)
+library(DBI)
+library(RPostgres)
+
+# Load raw survey export
+survey_raw <- read_csv("https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/(Anonymous)%20Movie%20Survey%20(Responses)%20-%20Form%20Responses%201.csv")
+
+glimpse(survey_raw)
+```
+
+The raw data has one row per respondent and one column per movie, with ratings from 1-5 or the text "Did not watch" when a respondent hadn't seen that movie.
+
+```{r}
+survey_clean <- survey_raw %>%
+  mutate(user_id = row_number()) %>%
+  mutate(across(-c(Timestamp, user_id), ~ na_if(., "Did not watch"))) %>%
+  mutate(across(-c(Timestamp, user_id), as.numeric))
+```
+
+Here I convert every "Did not watch" response into `NA` and convert the rating columns to numeric. One respondent answered "Did not watch" for all six movies and contributes no information, so I remove that row before continuing.
+
+```{r}
+survey_clean <- survey_clean %>%
+  filter(if_any(-c(Timestamp, user_id), ~ !is.na(.)))
+
+nrow(survey_clean)
+```
+
+This leaves 12 valid respondents.
+
+## Reshaping to Tidy Long Format
+
+```{r}
+ratings_long <- survey_clean %>%
+  pivot_longer(
+    cols = -c(Timestamp, user_id),
+    names_to = "movie_title",
+    values_to = "rating"
+  ) %>%
+  select(user_id, movie_title, rating)
+
+head(ratings_long)
+```
+
+Reshaping the data from wide to long format turns each person-movie combination into its own row, which matches the structure needed for the `ratings` table.
+
+## Building the Normalized Tables
+
+```{r}
+movies <- tibble(movie_title = unique(ratings_long$movie_title)) %>%
+  mutate(movie_id = row_number()) %>%
+  select(movie_id, movie_title)
+
+users <- survey_clean %>%
+  select(user_id)
+
+ratings <- ratings_long %>%
+  left_join(movies, by = "movie_title") %>%
+  select(user_id, movie_id, rating) %>%
+  filter(!is.na(rating))
+
+movies
+```
+
+The `ratings` table only includes rows where a rating actually exists. Missing ratings ("Did not watch") are excluded entirely rather than stored as `NA` or a placeholder value like 0, since a 0 would incorrectly pull average ratings down and misrepresent what respondents actually said.
+
+## Loading into PostgreSQL
+
+```{r}
+con <- dbConnect(
+  RPostgres::Postgres(),
+  dbname = "movieratings",
+  host = "localhost",
+  port = 5432,
+  user = "postgres",
+  password = Sys.getenv("PG_PASSWORD")
+)
+```
+
+Note: the database password is never hardcoded in this file. It is read from an environment variable (`PG_PASSWORD`) so the code can be shared publicly without exposing credentials.
+
+```{r}
+
+dbExecute(con, "DROP TABLE IF EXISTS ratings;")
+dbExecute(con, "DROP TABLE IF EXISTS movies;")
+dbExecute(con, "DROP TABLE IF EXISTS users;")
+
+dbExecute(con, "
+  CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY
+  );
+")
+
+dbExecute(con, "
+  CREATE TABLE IF NOT EXISTS movies (
+    movie_id INTEGER PRIMARY KEY,
+    movie_title TEXT
+  );
+")
+
+dbExecute(con, "
+  CREATE TABLE IF NOT EXISTS ratings (
+    user_id INTEGER REFERENCES users(user_id),
+    movie_id INTEGER REFERENCES movies(movie_id),
+    rating INTEGER
+  );
+")
+```
+
+These three tables reflect a normalized schema: `users` and `movies` each hold one row per entity, and `ratings` is a junction table connecting the two, since a single user can rate many movies and a single movie can be rated by many users.
+
+```{r}
+dbWriteTable(con, "users", users, append = TRUE, row.names = FALSE)
+dbWriteTable(con, "movies", movies, append = TRUE, row.names = FALSE)
+dbWriteTable(con, "ratings", ratings, append = TRUE, row.names = FALSE)
+```
+
+## Querying the Data Back into R
+
+```{r}
+ratings_from_db <- dbGetQuery(con, "
+  SELECT u.user_id, m.movie_title, r.rating
+  FROM ratings r
+  JOIN users u ON r.user_id = u.user_id
+  JOIN movies m ON r.movie_id = m.movie_id;
+")
+
+dbDisconnect(con)
+
+head(ratings_from_db)
+```
+
+This query joins all three tables back together, confirming that the data round-tripped correctly from R into PostgreSQL and back.
+
+## Analysis
+
+```{r}
+movie_summary <- ratings_from_db %>%
+  group_by(movie_title) %>%
+  summarize(
+    n_ratings = n(),
+    avg_rating = mean(rating, na.rm = TRUE)
+  ) %>%
+  arrange(desc(avg_rating))
+
+movie_summary
+```
+
+```{r}
+user_summary <- ratings_from_db %>%
+  group_by(user_id) %>%
+  summarize(n_watched = n())
+
+user_summary
+```
+
+Sinners had the highest average rating (about 4.8 out of 11 responses) and also the most responses overall, meaning it was both the most-watched and best-rated movie in the survey. Dead Man's Wire had the lowest average rating (about 3.7) but also one of the smallest sample sizes (3 ratings), so that average is based on very little data and shouldn't be read with much confidence. Individual respondents also varied a lot in how many movies they had seen, ranging from just 1 movie up to all 6.
+
+## Conclusions
+
+This assignment walked through the full pipeline of collecting real survey data, cleaning it, reshaping it into a normalized format, and moving it between R and a SQL database. The biggest lesson was around missing data: treating "Did not watch" as a true missing value rather than a low score or a placeholder number turned out to matter a lot, since including it as a 0 would have made every movie's average rating look much worse than it actually was. A next step to extend this work would be collecting more responses so that averages based on very few ratings (like Dead Man's Wire) are more trustworthy, or exploring whether a weighted average that accounts for sample size would give a fairer ranking than a simple mean.
+
+#### **AI Citation**
+
+Anthropic. (2026). Claude Sonnet 5 \[Large language model\]. <https://claude.ai>. Accessed September 13, 2026.
