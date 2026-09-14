@@ -1,0 +1,167 @@
+---
+title: "Week 2 Assignment 2B Approach"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction (Approach)
+
+The goal of this assignment is to evaluate a binary classification model using the provided dataset. Before writing any code, I read the article on classification metrics that was assigned, which explains confusion matrices, accuracy, precision, recall, and F1 score using a cancer diagnosis example.
+
+My plan is to first calculate the null error rate, basically how accurate a model would be if it just guessed the majority class every time. The article's example showed that a bad model can still get 95% accuracy if the data is imbalanced, so I want to check whether the penguin data has that same issue before trusting any accuracy numbers later.
+
+Next, I'll compute confusion matrices at three thresholds (0.2, 0.5, 0.8) by comparing ".pred_female" to each threshold myself, rather than using the ".pred_class" column that's already in the file. From each confusion matrix I'll calculate Accuracy, Precision, Recall, and F1.
+
+The first challenge I anticipate is making sure I don't mix up which class counts as "positive." The second challenge will be figuring out a good way to present three confusion matrices and a metrics table clearly instead of just dumping numbers into the document. Once I have the results, I plan to think through the precision/recall tradeoff to explain when a lower or higher threshold would make more sense in practice.
+
+To begin, we load the dataset from the GitHub url.
+
+```{r}
+
+library(tidyverse)
+
+url <- "https://raw.githubusercontent.com/acatlin/data/refs/heads/master/penguin_predictions.csv"
+penguins <- read_csv(url)
+```
+
+Then review the data with glimpse.
+
+```{r}
+glimpse(penguins)
+```
+
+Above data shows 93 observations with three variables. Checking class balance.
+
+```{r}
+# Check class balance
+penguins %>% count(sex)
+```
+
+Converting female/male to binary:
+
+```{r}
+penguins <- penguins %>%
+  mutate(sex_binary = if_else(sex == "female", 1, 0))
+```
+
+### Task 1: Calculate Null Error Rate
+
+```{r}
+class_counts <- count(penguins, sex) %>%
+  mutate(prop = n / sum(n))
+
+class_counts
+
+majority_prop <- max(class_counts$prop)
+null_error_rate <- 1 - majority_prop
+null_error_rate
+```
+
+The null error rate is \~41.9%.
+
+```{r}
+ggplot(penguins, aes(x = sex, fill = sex)) +
+  geom_bar() +
+  labs(title = "Distribution of Actual Class (sex)",
+       x = "Actual Class", y = "Count") +
+  theme_minimal()
+```
+
+The above bar chart visualizes class distributions (we previously confirmed majority class is male).
+
+### Task 2: Confusion Matrices at Multiple Thresholds
+
+Computing predicted classes at each threshold (0.2, 0.5(default .pred_class) and 0.8).
+
+```{r}
+penguins <- penguins %>%
+  mutate(
+    pred_02 = if_else(.pred_female > 0.2, 1, 0),
+    pred_05 = if_else(.pred_female > 0.5, 1, 0),
+    pred_08 = if_else(.pred_female > 0.8, 1, 0)
+  )
+```
+
+Building confusion matrix for each threshold.
+
+```{r}
+cm_at_threshold <- function(data, pred_col, actual_col) {
+  data %>%
+    summarise(
+      TP = sum(.data[[pred_col]] == 1 & .data[[actual_col]] == 1),
+      FP = sum(.data[[pred_col]] == 1 & .data[[actual_col]] == 0),
+      TN = sum(.data[[pred_col]] == 0 & .data[[actual_col]] == 0),
+      FN = sum(.data[[pred_col]] == 0 & .data[[actual_col]] == 1)
+    )
+}
+
+cm_02 <- cm_at_threshold(penguins, "pred_02", "sex_binary")
+cm_05 <- cm_at_threshold(penguins, "pred_05", "sex_binary")
+cm_08 <- cm_at_threshold(penguins, "pred_08", "sex_binary")
+
+cm_02; cm_05; cm_08
+```
+
+#### [**Results**]{.underline}
+
+**Threshold = 0.2**
+
+|                       | Actual: Female | Actual: Male |
+|-----------------------|:--------------:|:------------:|
+| **Predicted: Female** |    TP = 37     |    FP = 6    |
+| **Predicted: Male**   |     FN = 2     |   TN = 48    |
+
+**Threshold = 0.5**
+
+|                       | Actual: Female | Actual: Male |
+|-----------------------|:--------------:|:------------:|
+| **Predicted: Female** |    TP = 36     |    FP = 3    |
+| **Predicted: Male**   |     FN = 3     |   TN = 51    |
+
+**Threshold = 0.8**
+
+|                       | Actual: Female | Actual: Male |
+|-----------------------|:--------------:|:------------:|
+| **Predicted: Female** |    TP = 36     |    FP = 2    |
+| **Predicted: Male**   |     FN = 3     |   TN = 52    |
+
+### Task 3: Performance Metrics
+
+For each threshold, calculating accuracy, precision, recall, and F1 from the confusion matrix values.
+
+```{r}
+metrics_at_threshold <- function(cm) {
+  cm %>%
+    mutate(
+      accuracy  = (TP + TN) / (TP + FP + TN + FN),
+      precision = TP / (TP + FP),
+      recall    = TP / (TP + FN),
+      f1        = 2 * precision * recall / (precision + recall)
+    )
+}
+
+results <- bind_rows(
+  metrics_at_threshold(cm_02) %>% mutate(threshold = 0.2),
+  metrics_at_threshold(cm_05) %>% mutate(threshold = 0.5),
+  metrics_at_threshold(cm_08) %>% mutate(threshold = 0.8)
+) %>%
+  select(threshold, TP, FP, TN, FN, accuracy, precision, recall, f1)
+
+results
+```
+
+### 
+Task 4: Threshold Use Cases
+
+The best threshold to use depends on the results we want or need to achieve. A 0.2 threshold gives the model a lot of leeway for making predictions and would be useful if we needed to ensure every single female penguin is checked - e.g. if there is a severe disease affecting that population.
+
+On the other hand, if we need to be sure to only select female penguins, we would want to use a 0.8 threshold, which increases precision.
+
+## Conclusion
+
+Creating a useful model entails deciding which factors are the most important. This assignment showed why a single number like accuracy isn't enough to judge a model. The null error rate gave me a baseline to compare against, and calculating Precision, Recall, and F1 at three different thresholds showed how much the "right" answer depends on which mistake matters more in a given situation, missing a true case or acting on a false one.
+
+#### **AI Citation**
+
+Anthropic. (2026). Claude Sonnet 5 \[Large language model\]. <https://claude.ai>. Accessed September 13, 2026.
