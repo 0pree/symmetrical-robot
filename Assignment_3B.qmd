@@ -1,0 +1,132 @@
+---
+title: "Week 3 Assignment 3B - Window Functions"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction (Approach)
+
+The goal of this assignment is to find a time series dataset covering two or more items and use window functions to calculate a year-to-date average and a 6-day moving average for each item. I used daily stock price data for three companies (Apple, Microsoft, and Alphabet), pulled directly using the `tidyquant` R package, which connects to Yahoo Finance and avoids the need to manually download or host a CSV file. Since I only specified a start date of January 2022 and no end date, the data extends all the way to the present, giving me almost four years of daily prices rather than just a single-year window.
+
+My plan is to pull daily closing prices for a few tickers, combine them into one tidy data frame with a date, ticker symbol, and price column, and then use dplyr and slider to calculate the two required window calculations. A 6-day moving average is a rolling calculation, so I'll need a function that looks at a sliding window of the 6 most recent trading days for each ticker separately. The year-to-date average is a bit different, since it's an expanding calculation that resets at the start of each calendar year and grows to include more days as the year goes on, rather than staying a fixed window size.
+
+The first challenge I anticipate is making sure the rolling and expanding calculations are computed separately for each ticker, so that one company's prices don't accidentally get mixed into another company's moving average. The second challenge will be handling the start of the dataset, since a 6-day moving average doesn't have a full 6 days to average over until day 6, so I'll need to decide how to handle those first few rows for each ticker.
+
+Since this assignment allows either SQL or dplyr for the window functions, I'm planning to do the main analysis in R with dplyr and slider, since I can load the data directly there without an extra step through PostgreSQL.
+
+## Loading the Data
+
+```{r}
+library(tidyverse)
+library(tidyquant)
+library(slider)
+
+tickers <- c("AAPL", "MSFT", "GOOGL")
+
+prices_raw <- tq_get(
+  tickers,
+  from = "2022-01-01",
+  get = "stock.prices"
+)
+
+glimpse(prices_raw)
+```
+
+`tq_get()` returns a tidy data frame directly, with one row per ticker per trading day, so no conversion from an `xts` object is needed. I'm using the `adjusted` closing price column for all calculations below, since it accounts for splits and dividends and is the standard choice for this kind of analysis.
+
+## Preparing the Data
+
+```{r}
+prices <- prices_raw %>%
+  select(symbol, date, adjusted) %>%
+  arrange(symbol, date)
+
+head(prices)
+```
+
+Sorting by `symbol` and then `date` is essential here. Window functions like a moving average depend entirely on row order, so if the data isn't sorted correctly within each ticker, the rolling and expanding calculations below would silently produce wrong results without throwing any error.
+
+## Calculating the 6-Day Moving Average
+
+```{r}
+prices <- prices %>%
+  group_by(symbol) %>%
+  mutate(
+    moving_avg_6d = slide_dbl(
+      adjusted,
+      mean,
+      .before = 5,
+      .complete = FALSE
+    )
+  ) %>%
+  ungroup()
+
+prices %>%
+  group_by(symbol) %>%
+  slice_head(n = 8) %>%
+  select(symbol, date, adjusted, moving_avg_6d)
+```
+
+`slide_dbl()` with `.before = 5` looks at the current day plus the 5 days before it, which is a 6-day window total. Grouping by `symbol` first ensures the rolling window is calculated independently for each company. I set `.complete = FALSE`, which means the first few rows for each ticker (days 1 through 5) will average over however many days are actually available rather than returning `NA`. This is a deliberate choice, not the only valid one, and it means the moving average is slightly less stable for the very first few trading days of the dataset.
+
+## Calculating the Year-to-Date Average
+
+```{r}
+prices <- prices %>%
+  mutate(year = year(date)) %>%
+  group_by(symbol, year) %>%
+  mutate(ytd_avg = cummean(adjusted)) %>%
+  ungroup()
+
+prices %>%
+  group_by(symbol) %>%
+  slice_head(n = 5) %>%
+  select(symbol, date, adjusted, ytd_avg)
+```
+
+`cummean()` calculates a running average that grows with each new row. Grouping by `symbol` and `year` together is what makes this reset automatically at the start of each calendar year, rather than continuing to expand across the entire multi-year dataset.
+
+## Sanity Check
+
+```{r}
+prices %>%
+  filter(symbol == "AAPL") %>%
+  slice(10:15) %>%
+  select(symbol, date, adjusted, moving_avg_6d)
+```
+
+I checked AAPL on 2022-01-10, the first day with a genuine 6-day history. Manually averaging the adjusted prices from 01-03 through 01-10 (177.79, 175.53, 170.86, 168.01, 168.17, 168.19) gives 171.43, which matches the `moving_avg_6d` value of 171 shown in the output. This confirms the rolling window is calculating correctly.
+
+## Visualizing the Results
+
+```{r}
+prices %>%
+  pivot_longer(
+    cols = c(adjusted, moving_avg_6d, ytd_avg),
+    names_to = "series",
+    values_to = "price"
+  ) %>%
+  ggplot(aes(x = date, y = price, color = series)) +
+  geom_line() +
+  facet_wrap(~ symbol, scales = "free_y") +
+  labs(
+    title = "Daily Price vs. 6-Day Moving Average vs. Year-to-Date Average",
+    x = "Date", y = "Price (USD)", color = "Series"
+  ) +
+  theme_minimal()
+```
+
+Looking at the full chart, the `moving_avg_6d` (green) line sits almost directly on top of the raw `adjusted` price (red) across all three tickers — at a multi-year scale, a 6-day window is so short that it only smooths out the smallest day-to-day noise and barely lags behind the actual price at all. The `ytd_avg` (blue) line tells a completely different story: it's visibly much smoother and consistently lags well behind the current price, especially noticeable as a repeating "sawtooth" pattern where the blue line drops sharply at the start of each new year (2023, 2024, 2025, 2026), since it resets and starts averaging in only that year's prices again. It then climbs back up toward the current price level as the year goes on and accumulates more days.
+
+## Interpreting the Results
+
+All three tickers show a similar overall shape: a decline through 2022 into a low point around early-to-mid 2023, followed by a sustained rally into 2025 and 2026. GOOGL shows the largest overall move, roughly quadrupling from its 2023 low near \$85 to around \$400 by 2026. MSFT stands out for having a sharper pullback around 2025 (dropping from the low 500s back into the low 400s) before recovering again, which isn't as pronounced in AAPL or GOOGL over the same period. The `moving_avg_6d` line is nearly indistinguishable from the raw price at this scale, since 6 days is a tiny window compared to 4 years of data. The `ytd_avg` line is the one that actually reveals the trend more clearly. It lags most visibly right after each year resets, when the current price has already moved a lot from where that year started.
+
+## Conclusions
+
+Comparing the two window types on this multi-year dataset made the difference between a short, fixed window and a resetting, expanding window very clear visually. The 6-day moving average is barely distinguishable from the raw daily price at this timescale, since it only reacts to very recent movement. The year-to-date average, on the other hand, resets every January and reveals a clear sawtooth pattern as it "catches up" to the current price over the course of each year. This showed me that a moving average's usefulness depends heavily on matching the window length to the timescale you actually care about. A 6-day window is suited to short-term noise, not a multi-year trend. A reasonable extension would be adding a longer moving average, like 50 or 200 days, which are common benchmarks in real financial analysis, to see whether that captures the multi-year trend more clearly than either of the two windows used here. Another option would be adding a SQL version of the same calculations using `OVER (PARTITION BY symbol ORDER BY date)`, to demonstrate the same result directly from the database.
+
+#### **AI Citation**
+
+Anthropic. (2026). Claude Sonnet 5 \[Large language model\]. <https://claude.ai>. Accessed September 2026.

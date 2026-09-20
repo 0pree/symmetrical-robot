@@ -1,0 +1,127 @@
+---
+title: "Week 3 Assignment 3A - Global Baseline Estimate"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction (Approach)
+
+The goal of this assignment is to implement a Global Baseline Estimate recommender using the movie ratings data I already collected and stored in PostgreSQL for Assignment 2A. The idea behind a Global Baseline Estimate is that you can predict how a person would likely rate a movie they haven't seen yet, using three pieces of information: the overall average rating across everyone and every movie, how much that specific movie tends to run above or below the average, and how much that specific person tends to rate above or below the average.
+
+My plan is to reuse the same tables from 2A rather than rebuilding anything from scratch. I'll query the ratings back into R, then calculate the overall mean rating, each movie's average deviation from that mean, and each user's average deviation from that mean. Combining those three numbers gives an estimated rating for any user-movie pair, including ones where that person never actually rated that movie.
+
+The main challenge I anticipate is that some of my movies and users have very few ratings. In 2A, Dead Man's Wire only had 3 ratings total, so any deviation calculated from that movie is based on very little data and might not be reliable. I'll need to keep that limitation in mind when interpreting the estimates rather than treating every prediction as equally trustworthy. A second challenge will be deciding exactly which user-movie pairs are worth estimating, since with only 12 users and 6 movies there aren't that many missing combinations to predict in the first place.
+
+## Loading the Data
+
+```{r}
+library(tidyverse)
+library(DBI)
+library(RPostgres)
+
+con <- dbConnect(
+  RPostgres::Postgres(),
+  dbname = "movieratings",
+  host = "localhost",
+  port = 5432,
+  user = "postgres",
+  password = Sys.getenv("PG_PASSWORD")
+)
+
+ratings_from_db <- dbGetQuery(con, "
+  SELECT u.user_id, m.movie_title, r.rating
+  FROM ratings r
+  JOIN users u ON r.user_id = u.user_id
+  JOIN movies m ON r.movie_id = m.movie_id;
+")
+
+dbDisconnect(con)
+
+head(ratings_from_db)
+```
+
+This reuses the exact same query from Assignment 2A to pull the ratings back out of PostgreSQL, joined with user and movie names so everything is readable.
+
+## Calculating the Global Mean
+
+```{r}
+mu <- mean(ratings_from_db$rating, na.rm = TRUE)
+mu
+```
+
+The global mean across every rating in the dataset is about 4.49. This is the baseline that every individual estimate adjusts up or down from.
+
+## Calculating Movie Deviations
+
+```{r}
+movie_dev <- ratings_from_db %>%
+  group_by(movie_title) %>%
+  summarize(movie_avg = mean(rating, na.rm = TRUE)) %>%
+  mutate(movie_dev = movie_avg - mu) %>%
+  select(movie_title, movie_dev)
+
+movie_dev %>% arrange(desc(movie_dev))
+```
+
+Sinners and F1 both sit above the global average, with deviations of about +0.33 and +0.32. Dead Man's Wire has the lowest deviation, at about -0.82, meaning it tends to be rated well below the overall average. This matches what I found in 2A, where Dead Man's Wire had the lowest average rating.
+
+## Calculating User Deviations
+
+```{r}
+user_dev <- ratings_from_db %>%
+  group_by(user_id) %>%
+  summarize(user_avg = mean(rating, na.rm = TRUE)) %>%
+  mutate(user_dev = user_avg - mu) %>%
+  select(user_id, user_dev)
+
+user_dev %>% arrange(desc(user_dev))
+```
+
+Some users consistently rate above the global average (deviation around +0.52), while a few rate consistently below it (as low as about -0.48). This captures each person's general rating tendency, separate from which specific movies they watched.
+
+## Finding Missing User-Movie Pairs
+
+```{r}
+all_pairs <- crossing(
+  user_id = unique(ratings_from_db$user_id),
+  movie_title = unique(ratings_from_db$movie_title)
+)
+
+missing_pairs <- all_pairs %>%
+  anti_join(ratings_from_db, by = c("user_id", "movie_title"))
+
+nrow(missing_pairs)
+```
+
+Out of 12 users and 6 movies, there are 72 possible user-movie combinations, and 39 of them are missing, meaning that person never rated that particular movie. These are the pairs the Global Baseline Estimate is actually meant to predict.
+
+## Applying the Global Baseline Estimate Formula
+
+```{r}
+estimates <- missing_pairs %>%
+  left_join(movie_dev, by = "movie_title") %>%
+  left_join(user_dev, by = "user_id") %>%
+  mutate(
+    estimate_raw = mu + movie_dev + user_dev,
+    estimate = pmax(1, pmin(5, estimate_raw))
+  )
+
+estimates %>%
+  arrange(user_id, movie_title) %>%
+  select(user_id, movie_title, estimate_raw, estimate)
+```
+
+The formula is simply the global mean plus the movie's deviation plus the user's deviation. A few of the raw estimates came out slightly above 5, since some users have a positive deviation and happened to be missing a rating for a movie that also has a positive deviation. Since ratings can't actually exceed 5 on this survey's scale, I clamped any estimate above 5 down to 5, and would do the same at the low end if any estimate had dropped below 1, using `pmax()` and `pmin()` together.
+
+## Interpreting the Results
+
+The estimates that involve Dead Man's Wire are the ones I trust least, since that movie's deviation of -0.82 was calculated from only 3 actual ratings in the original 2A data. A deviation built on that little data could easily shift if even one more person rated the movie, so any estimate involving Dead Man's Wire should be read as a rough guess rather than a confident prediction. Estimates involving Sinners or F1 are on slightly firmer ground, since those movies had more ratings to begin with.
+
+## Conclusions
+
+This assignment showed how a fairly simple formula, just three averages added together, can generate a reasonable guess for how someone would rate something they've never actually seen. The most important limitation is that the formula treats every deviation as equally trustworthy, even though some of them, like Dead Man's Wire's, are built on very few data points. A next step to extend this work would be weighting each movie's or user's deviation by how many ratings it's based on, so that a deviation calculated from only 3 ratings counts for less than one calculated from 11 ratings. It would also be worth comparing these Global Baseline estimates against a simple collaborative filtering approach to see how much the personalized method actually improves on this non-personalized baseline.
+
+#### **AI Citation**
+
+Anthropic. (2026). Claude Sonnet 5 \[Large language model\]. <https://claude.ai>. Accessed September 2026.
