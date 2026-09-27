@@ -1,0 +1,102 @@
+---
+title: "Project 1 - Chess Tournament Rankings"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction
+
+This project turns a messy chess tournament text file into a clean CSV with one row per player: name, state, total points, pre-tournament rating, and the average pre-tournament rating of their opponents. Each player's data is split across two lines, and the round columns list opponent pair numbers instead of ratings, so the opponent ratings have to be looked up separately.
+
+## Read the File
+
+```{r}
+library(tidyverse)
+
+raw_lines <- read_lines("https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/tournamentinfo.txt")
+
+head(raw_lines, 6)
+```
+
+## Clean Up the Lines
+
+```{r}
+content <- raw_lines[!str_detect(str_trim(raw_lines), "^-+$")]
+content <- content[-c(1, 2)]
+
+line1 <- content[seq(1, length(content), by = 2)]
+line2 <- content[seq(2, length(content), by = 2)]
+```
+
+Dash-only separator lines and the two header rows are removed. What remains is two lines per player, so odd lines hold name, points, and rounds, and even lines hold state and rating.
+
+## Parse Each Player
+
+```{r}
+parse_player <- function(l1, l2) {
+  f1 <- str_trim(str_split(l1, "\\|")[[1]])
+  f2 <- str_trim(str_split(l2, "\\|")[[1]])
+
+  tibble(
+    pair_num = as.numeric(f1[1]),
+    name = f1[2],
+    state = f2[1],
+    total_points = as.numeric(f1[3]),
+    pre_rating = as.numeric(str_match(f2[2], "R:\\s*(\\d+)")[, 2]),
+    opponent = as.numeric(str_extract(f1[4:10], "\\d+"))
+  )
+}
+
+players_long <- bind_rows(Map(parse_player, line1, line2))
+```
+
+Each line is split on `|`. The pre-rating is pulled from text like `R: 1794 ->1817`, and each round like `W 39` gives the opponent's pair number. Byes and unplayed rounds have no number, so they become `NA`. The result has one row per player per round.
+
+## Calculate Average Opponent Rating
+
+```{r}
+players <- players_long %>%
+  distinct(pair_num, name, state, total_points, pre_rating)
+
+final_table <- players_long %>%
+  left_join(players %>% select(pair_num, opp_rating = pre_rating),
+            by = c("opponent" = "pair_num")) %>%
+  group_by(pair_num) %>%
+  summarize(avg_opp_rating = round(mean(opp_rating, na.rm = TRUE))) %>%
+  right_join(players, by = "pair_num") %>%
+  arrange(pair_num) %>%
+  select(name, state, total_points, pre_rating, avg_opp_rating)
+
+knitr::kable(head(final_table, 10))
+```
+
+## Check Against the Example
+
+```{r}
+final_table %>% filter(name == "GARY HUA")
+```
+
+Gary Hua matches the assignment's example exactly: ON, 6.0, 1794, 1605.
+
+## Export to CSV
+
+```{r}
+write_csv(final_table, "tournament_results.csv")
+```
+
+Resulting file available at <https://github.com/0pree/symmetrical-robot/blob/main/tournament_results.csv>
+
+## Interpreting the Results
+
+The tournament had 64 players, mostly from Michigan (55), with 8 from Ontario and 1 from Ohio. Gary Hua, Dakshesh Daruri, and Aditya Bajaj tied for the top score with 6.0 points. Aditya Bajaj stands out because his pre-rating of 1384 was the lowest of the top finishers, yet his opponents averaged 1564, so he beat stronger players than his rating predicted. Gary Hua faced the toughest field overall, with the highest average opponent rating in the tournament at 1605.
+
+23 players played fewer than 7 games because of byes or withdrawals. Their averages only include games actually played, which matches how the assignment calculated Gary Hua's example.
+
+## Conclusions
+
+The hardest part was realizing the round columns store opponent pair numbers, not ratings, so the full player table had to be built before any averages could be calculated. Testing the output against Gary Hua's known result was a quick way to confirm the parsing worked. A next step would be comparing each player's actual points to their expected score from the Elo formula, which would show who over or underperformed their rating, like Aditya Bajaj.
+
+#### AI Citation
+
+Anthropic. (2026). Claude Sonnet 5 \[Large language model\]. https://claude.ai. Accessed September 2026.
