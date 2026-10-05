@@ -1,0 +1,139 @@
+---
+title: "Week 5 Assignment 5B - Elo Calculations"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction
+
+For this assignment, I used the chess tournament data from Project 1 to calculate each player's expected score with the Elo formula and compared it to their actual score. The difference shows which players performed better or worse than their pre-tournament rating predicted.
+
+## Load and Parse the Data
+
+```{r}
+library(tidyverse)
+
+raw_lines <- read_lines("https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/tournamentinfo.txt")
+
+content <- raw_lines[!str_detect(str_trim(raw_lines), "^-+$")]
+content <- content[-c(1, 2)]
+
+line1 <- content[seq(1, length(content), by = 2)]
+line2 <- content[seq(2, length(content), by = 2)]
+
+parse_player <- function(l1, l2) {
+  f1 <- str_trim(str_split(l1, "\\|")[[1]])
+  f2 <- str_trim(str_split(l2, "\\|")[[1]])
+
+  tibble(
+    pair_num = as.numeric(f1[1]),
+    name = f1[2],
+    total_points = as.numeric(f1[3]),
+    pre_rating = as.numeric(str_match(f2[2], "R:\\s*(\\d+)")[, 2]),
+    result = str_sub(f1[4:10], 1, 1),
+    opponent = as.numeric(str_extract(f1[4:10], "\\d+"))
+  )
+}
+
+players_long <- bind_rows(Map(parse_player, line1, line2))
+```
+
+This uses the same parsing approach as Project 1, with one addition. Each round's result letter (W, L, D, or a bye or forfeit code) is now saved along with the opponent's pair number.
+
+## Calculate Expected Scores
+
+The expected score for one game is:
+
+$$E = \frac{1}{1 + 10^{(R_{opponent} - R_{player})/400}}$$
+
+Source: "The Elo Rating System for Chess and Beyond" \[video\], February 15, 2019. https://www.youtube.com/watch?v=AsYfbmp0To0
+
+```{r}
+ratings <- players_long %>%
+  distinct(pair_num, opp_rating = pre_rating)
+
+games <- players_long %>%
+  filter(result %in% c("W", "D", "L")) %>%
+  left_join(ratings, by = c("opponent" = "pair_num")) %>%
+  mutate(
+    score = case_when(result == "W" ~ 1, result == "D" ~ 0.5, result == "L" ~ 0),
+    expected = 1 / (1 + 10^((opp_rating - pre_rating) / 400))
+  )
+```
+
+Only games that were actually played (wins, draws, and losses) are included. Some players received points from byes or forfeits, but those rounds have no opponent rating to calculate an expected result from. Counting those points in the actual score would make those players look like they overperformed. For example, Amiyatosh Pwnanandam earned 3.5 total points, but only 2.0 of those came from games he played. Including his bye points would have moved him into the top five overperformers.
+
+## Check One Player by Hand
+
+```{r}
+games %>%
+  filter(name == "GARY HUA") %>%
+  select(round_opponent = opponent, opp_rating, result, score, expected) %>%
+  knitr::kable(digits = 3)
+```
+
+For Gary Hua's first game, his opponent was rated 1436 and he was rated 1794:
+
+$E = 1 / (1 + 10^{(1436 - 1794)/400}) = 0.887$
+
+This matches the first row of the table. His seven games add up to an expected score of 5.16, compared to an actual score of 6.0.
+
+## Summarize by Player
+
+```{r}
+results <- games %>%
+  group_by(pair_num, name, pre_rating) %>%
+  summarize(
+    games_played = n(),
+    actual = sum(score),
+    expected = round(sum(expected), 2),
+    .groups = "drop"
+  ) %>%
+  mutate(difference = round(actual - expected, 2))
+```
+
+## Top Five Overperformers
+
+```{r}
+results %>%
+  slice_max(difference, n = 5) %>%
+  select(name, pre_rating, games_played, actual, expected, difference) %>%
+  knitr::kable()
+```
+
+## Top Five Underperformers
+
+```{r}
+results %>%
+  slice_min(difference, n = 5) %>%
+  select(name, pre_rating, games_played, actual, expected, difference) %>%
+  knitr::kable()
+```
+
+## Rating vs. Performance
+
+```{r}
+ggplot(results, aes(x = pre_rating, y = difference)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Actual Minus Expected Score by Pre-Tournament Rating",
+    x = "Pre-Tournament Rating", y = "Actual - Expected"
+  ) +
+  theme_minimal()
+```
+
+## Interpreting the Results
+
+Aditya Bajaj was the biggest overperformer by a wide margin. With a rating of 1384, he was expected to score about 1.95 points against his opponents but finished with 6.0, tying for first place. Zachary James Houghton, Anvit Rao, and Stefano Lee also scored roughly three points more than expected. Jacob Alexander Lavalley is an unusual case. His pre-rating of 377 is provisional, based on only three previous games, which made his expected score close to zero. His three wins look like a huge overperformance, but his rating was likely just inaccurate going in, which his post-tournament rating of 1076 reflects.
+
+On the other end, Loren Schwiebert was the biggest underperformer. With a rating of 1745, he was expected to score about 6.3 points but finished with 3.5. George Avery Jones, Larry Hodge, Jared Ge, and Rishi Shetty also finished well below their expected scores.
+
+## Conclusions
+
+The Elo expected score gives a useful way to judge performance relative to the strength of each player's opponents, rather than looking at total points alone. The bye issue showed that how the data is handled can change the results, so it was important to compare only games that were actually played. Provisional ratings like Lavalley's are another limitation, since the formula assumes each rating is an accurate measure of ability. A next step would be to apply the Elo update formula to calculate each player's new rating after every round and compare it to the post-tournament ratings listed in the file.
+
+#### AI Citation
+
+Anthropic. (2026). Claude Sonnet 5 \[Large language model\]. https://claude.ai. Accessed October 2026.
