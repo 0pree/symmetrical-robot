@@ -1,0 +1,18 @@
+---
+title: "Project 2 Approach - Tidying Three Wide Datasets"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction (Approach)
+
+For this project, I will tidy and analyze three wide datasets from our class discussion: U.S. inflation rates (Samantha Mesa), population estimates for the 10 most populous states (Anastasiia Gmyrina), and average U.S. tuition from 2004 to 2016 (Mubin Ejaz). Each one is wide for a different reason, so I expect the tidying steps to vary from dataset to dataset.
+
+**U.S. inflation rates.** The source table on the U.S. Inflation Calculator website has one row per year, a separate column for each month, and an annual average column next to the monthly values. I plan to recreate this table as a CSV, remove the annual average column since it can be recalculated from the monthly values, and reshape the months into a single column so each row represents one year and month. The main challenge is that some cells contain text, such as "Avail. Sept. 11," instead of a number. I will need to convert those to missing values before treating the column as numeric. Once the data is tidy, I would like to compare inflation before, during, and after the 2021 to 2022 spike, and check whether the annual average hides large month to month swings.
+
+**10 most populous states.** This is the simplest of the three, with one row per state and a column for each year from 2020 to 2022. I plan to reshape the year columns into rows, then calculate the percent change in population from 2020 to 2022 to see which states grew and which ones shrank.
+
+**U.S. average tuition.** This dataset comes from TidyTuesday and has one row per state, with each academic year in its own column. The year labels are stored as ranges like "2004-05," so I will need to decide how to convert them into a usable year value. The tuition amounts may also be stored as text with dollar signs and commas, which would need cleaning before any calculations. Once tidy, I plan to look at how tuition grew over the 12 years and which states saw the largest increases.
+
+For all three, I will keep each raw file in its original wide format in my repository before tidying, so the starting point is clear and the cleanup steps can be reproduced.
