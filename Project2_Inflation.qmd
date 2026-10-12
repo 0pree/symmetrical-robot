@@ -1,0 +1,169 @@
+---
+title: "Project 2: U.S. Inflation Rates, 2000 to 2026"
+author: "Supriya P."
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: flatly
+execute:
+  echo: true
+  warning: false
+---
+
+## Introduction
+
+This dataset was posted by Samantha Mesa in the Week 5 discussion. It comes from the "Current US Inflation Rates: 2000-2026" table on the U.S. Inflation Calculator website (<https://www.usinflationcalculator.com/inflation/current-inflation-rates/>), which reports annual inflation rates from the Bureau of Labor Statistics Consumer Price Index (all items, U.S. city average, all urban consumers, not seasonally adjusted). Each value is the percent change in prices compared to the same month one year earlier.
+
+The site has no download option, so I copied the table into a CSV in its original layout.
+
+## Raw Data Structure
+
+```{r}
+library(tidyverse)
+library(knitr)
+
+raw <- read_csv(
+  "https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/us_inflation_rates.csv",
+  col_types = cols(.default = col_character())
+)
+
+dim(raw)
+kable(head(raw, 5))
+```
+
+The table has 27 rows and 14 columns. Each row is a year, each month has its own column, and the last column is the annual average. A few things make it untidy:
+
+- The month is stored in the column headers instead of in its own column.
+- The annual average is a summary value sitting next to the monthly values.
+- Some cells contain text instead of numbers. September 2026 says "Avail. Oct. 14" because it had not been released yet, and October 2025 shows a dash with an asterisk, which a footnote on the site explains was unavailable due to the 2025 lapse in government appropriations.
+- October through December 2026 and the 2026 annual average are blank.
+
+I read every column as text so these cells load without errors, and converted them on purpose in the next step.
+
+## Tidying the Data
+
+```{r}
+inflation <- raw %>%
+  select(-Ave) %>%
+  pivot_longer(
+    cols = -Year,
+    names_to = "month",
+    values_to = "rate_text"
+  ) %>%
+  mutate(
+    year = as.integer(Year),
+    month = factor(month, levels = month.abb),
+    rate = if_else(str_detect(rate_text, "^-?[0-9.]+$"), as.numeric(rate_text), NA_real_)
+  ) %>%
+  select(year, month, rate_text, rate) %>%
+  arrange(year, month)
+
+kable(head(inflation, 6))
+```
+
+I removed the annual average column because it can be recalculated from the monthly values, and keeping it would mix summary values in with the monthly ones. After reshaping, each row is one year and one month.
+
+To convert the rates to numbers, I only kept values that look like a number (an optional minus sign, then digits and a decimal point). Everything else becomes `NA`. I did not use `parse_number()` here, because it would have turned "Avail. Oct. 14" into 14, which is not a real inflation rate.
+
+```{r}
+inflation %>%
+  filter(is.na(rate)) %>%
+  kable()
+```
+
+These five months are the only missing values: one from the 2025 shutdown, one that had not been released yet, and three that have not happened yet. I kept them as `NA` rather than filling them in, so the averages below are based only on months with real data.
+
+```{r}
+tidy_inflation <- inflation %>%
+  select(-rate_text)
+```
+
+## Analysis
+
+### Yearly Summary
+
+```{r}
+yearly <- tidy_inflation %>%
+  group_by(year) %>%
+  summarize(
+    months_reported = sum(!is.na(rate)),
+    avg_rate = round(mean(rate, na.rm = TRUE), 2),
+    low = min(rate, na.rm = TRUE),
+    high = max(rate, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(range = high - low)
+
+kable(yearly, col.names = c("Year", "Months Reported", "Average Rate (%)", "Lowest Month (%)", "Highest Month (%)", "Range"))
+```
+
+```{r}
+ggplot(tidy_inflation, aes(x = make_date(year, as.integer(month)), y = rate)) +
+  geom_line(color = "steelblue") +
+  geom_hline(yintercept = 2, linetype = "dashed", color = "gray40") +
+  labs(
+    title = "Monthly U.S. Inflation Rate, 2000 to 2026",
+    subtitle = "Dashed line marks 2%",
+    x = "Date", y = "Inflation Rate (%)"
+  ) +
+  theme_minimal()
+```
+
+The highest monthly rate in the data is 9.1% in June 2022, and the lowest is negative 2.1% in July 2009, when prices were falling during the recession. Every month above 5% falls in either 2008 or the 2021 to 2023 spike.
+
+### Comparing Periods
+
+```{r}
+periods <- tidy_inflation %>%
+  mutate(period = case_when(
+    year <= 2007 ~ "2000 to 2007",
+    year <= 2019 ~ "2010 to 2019",
+    year >= 2021 & year <= 2023 ~ "2021 to 2023",
+    year >= 2024 ~ "2024 to 2026"
+  )) %>%
+  filter(!is.na(period)) %>%
+  group_by(period) %>%
+  summarize(avg_rate = round(mean(rate, na.rm = TRUE), 2), .groups = "drop")
+
+kable(periods, col.names = c("Period", "Average Monthly Rate (%)"))
+```
+
+Inflation averaged 1.78% between 2010 and 2019, then jumped to 5.62% from 2021 to 2023. Since 2024 it has averaged 2.95%, which is lower than the spike but still above both the 2010s and the 2% line. I left out 2008, 2009, and 2020 from this comparison because they were unusual years (the financial crisis and the start of the pandemic) that would blur the comparison between normal periods.
+
+### Does the Annual Average Hide Monthly Swings?
+
+```{r}
+yearly %>%
+  slice_max(range, n = 5) %>%
+  kable(col.names = c("Year", "Months Reported", "Average Rate (%)", "Lowest Month (%)", "Highest Month (%)", "Range"))
+```
+
+In some years the annual average hides a lot. In 2021, the average was 4.7%, but the rate climbed from 1.4% in January to 7.0% in December. In 2008, the average was 3.85%, but the rate went from 5.6% in July down to 0.1% in December. In calmer years like 2019, every month stayed within a 0.8 point range.
+
+### Checking the Data
+
+```{r}
+check <- yearly %>%
+  left_join(
+    raw %>% transmute(year = as.integer(Year), site_average = as.numeric(Ave)),
+    by = "year"
+  ) %>%
+  mutate(difference = round(avg_rate - site_average, 2))
+
+kable(check %>% select(year, avg_rate, site_average, difference),
+      col.names = c("Year", "My Average (%)", "Site Average (%)", "Difference"))
+```
+
+My yearly averages are within 0.1 percentage points of the site's annual averages for every year, which confirms the reshaping did not drop or duplicate any values. The small differences come from rounding, since the site likely calculates its averages from unrounded index values. For 2025, my average also leaves out the missing October value.
+
+## Conclusions
+
+The main tidying challenge was the text values mixed in with the numbers. Converting only cells that looked like numbers kept those placeholders from turning into fake rates. Once tidy, the data shows that inflation peaked at 9.1% in June 2022 and has come down since, but at about 3% it is still above what was typical in the 2010s. It also shows that a single annual average can hide large changes within the year, like in 2021.
+
+A next step would be to compare inflation with wage growth over the same period to see whether wages kept up with prices, or to break inflation down by category (food, housing, energy) to see what drove the 2022 spike.
+
+#### AI Citation
+
+Anthropic. (2026). Claude Opus 5.5 [Large language model]. https://claude.ai. Accessed October 2026.

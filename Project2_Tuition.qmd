@@ -1,0 +1,158 @@
+---
+title: "Project 2: U.S. Average Tuition by State, 2004 to 2016"
+author: "Supriya P."
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: flatly
+execute:
+  echo: true
+  warning: false
+---
+
+## Introduction
+
+This dataset was posted by Mubin Ejaz in the Week 5 discussion. It comes from TidyTuesday and shows the average tuition at public colleges and universities in each U.S. state for every academic year from 2004-05 to 2015-16. My goal is to see how much tuition rose over those 12 years and which states saw the biggest increases.
+
+## Raw Data Structure
+
+```{r}
+library(tidyverse)
+library(knitr)
+
+raw <- read_csv(
+  "https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/us_avg_tuition.csv",
+  show_col_types = FALSE
+)
+
+dim(raw)
+kable(head(raw, 5))
+```
+
+The table has 50 rows (one per state) and 13 columns. It is untidy in a few ways:
+
+- Each academic year is its own column, so the year is stored in the headers.
+- The years are written as ranges like "2004-05" instead of a single year.
+- Every tuition value is stored as text with a dollar sign and a comma, like "$5,683", so R reads it as character instead of a number.
+- One header has extra spaces around it. The 2007-08 column is actually named "  2007-08 ", which is easy to miss.
+
+```{r}
+names(raw)
+```
+
+## Tidying the Data
+
+```{r}
+tuition <- raw %>%
+  rename(state = State) %>%
+  pivot_longer(
+    cols = -state,
+    names_to = "academic_year",
+    values_to = "tuition_text"
+  ) %>%
+  mutate(
+    academic_year = str_trim(academic_year),
+    start_year = as.integer(str_sub(academic_year, 1, 4)),
+    tuition = parse_number(tuition_text)
+  ) %>%
+  select(state, academic_year, start_year, tuition)
+
+kable(head(tuition, 6))
+```
+
+After reshaping, each row is one state and one academic year. I used `str_trim()` to remove the extra spaces from the 2007-08 label before working with it. To get a numeric year, I kept the starting year of each academic year (so "2004-05" becomes 2004), and kept the original label in its own column for readability. `parse_number()` removed the dollar signs and commas from the tuition values.
+
+```{r}
+tuition %>%
+  summarize(
+    rows = n(),
+    states = n_distinct(state),
+    years = n_distinct(start_year),
+    missing_values = sum(is.na(tuition))
+  ) %>%
+  kable()
+```
+
+The tidy table has 600 rows (50 states times 12 years) with no missing values, so every value converted cleanly.
+
+## Analysis
+
+### National Trend
+
+```{r}
+national <- tuition %>%
+  group_by(start_year, academic_year) %>%
+  summarize(avg_tuition = round(mean(tuition)), .groups = "drop") %>%
+  mutate(pct_increase = round((avg_tuition / lag(avg_tuition) - 1) * 100, 1))
+
+kable(national, format.args = list(big.mark = ","),
+      col.names = c("Start Year", "Academic Year", "Average Tuition ($)", "Increase from Prior Year (%)"))
+```
+
+```{r}
+ggplot(national, aes(x = start_year, y = avg_tuition)) +
+  geom_line(color = "steelblue") +
+  geom_point(color = "steelblue") +
+  scale_y_continuous(labels = scales::dollar) +
+  labs(
+    title = "Average Public College Tuition Across States",
+    x = "Academic Year (start)", y = "Average Tuition"
+  ) +
+  theme_minimal()
+```
+
+The average across states rose from $6,410 in 2004-05 to $9,318 in 2015-16, an increase of about 45%. The biggest one-year jump was in 2009-10, at 8.5%, followed by 6.0% in 2010-11. Those years line up with the 2008 recession, when many states cut funding for public colleges, which likely pushed tuition up.
+
+### Which States Changed the Most
+
+```{r}
+state_change <- tuition %>%
+  filter(start_year %in% c(2004, 2015)) %>%
+  select(state, start_year, tuition) %>%
+  pivot_wider(names_from = start_year, values_from = tuition, names_prefix = "tuition_") %>%
+  mutate(
+    change = tuition_2015 - tuition_2004,
+    pct_change = round(change / tuition_2004 * 100, 1)
+  )
+
+state_change %>%
+  slice_max(pct_change, n = 5) %>%
+  kable(format.args = list(big.mark = ","),
+        col.names = c("State", "2004-05 ($)", "2015-16 ($)", "Change ($)", "Percent Change (%)"))
+
+state_change %>%
+  slice_min(pct_change, n = 5) %>%
+  kable(format.args = list(big.mark = ","),
+        col.names = c("State", "2004-05 ($)", "2015-16 ($)", "Change ($)", "Percent Change (%)"))
+```
+
+```{r}
+ggplot(state_change, aes(x = tuition_2004, y = pct_change)) +
+  geom_point(color = "steelblue") +
+  geom_text(
+    data = state_change %>% filter(pct_change > 90 | pct_change < 10),
+    aes(label = state), vjust = -0.7, size = 3
+  ) +
+  scale_x_continuous(labels = scales::dollar) +
+  labs(
+    title = "Tuition Growth vs. Starting Tuition",
+    x = "Tuition in 2004-05", y = "Percent Change by 2015-16 (%)"
+  ) +
+  theme_minimal()
+```
+
+Hawaii had the largest increase, with tuition more than doubling from $4,267 to $10,175 (138.5%). Arizona and Colorado were close behind at about 107%. Ohio was the only state where tuition went down, falling slightly from $10,378 to $10,196.
+
+The scatterplot shows that the fastest growth mostly happened in states that started out cheap. States that already had high tuition in 2004-05, like Ohio, Pennsylvania, and Vermont, grew more slowly. Even so, the most expensive states in 2015-16 were still in the Northeast: New Hampshire ($15,160), Vermont ($14,993), and Pennsylvania ($13,395). Wyoming stayed the cheapest at $4,891.
+
+## Conclusions
+
+The tidying for this dataset involved three small cleanup steps on top of the reshape: trimming the extra spaces in one header, converting academic year ranges into a single year, and stripping dollar signs and commas from the values. Once tidy, the data shows that average public tuition rose about 45% in 12 years, with the biggest jumps right after the 2008 recession. Growth was fastest in states that started out cheap, while the Northeast stayed the most expensive throughout.
+
+These values are not adjusted for inflation, so part of the increase reflects general price growth. A next step would be to adjust tuition using the CPI data from my inflation dataset to see how much tuition grew in real terms, or to compare tuition growth with state funding per student over the same years.
+
+#### AI Citation
+
+Anthropic. (2026). Claude Opus 5.5 [Large language model]. https://claude.ai. Accessed October 2026.

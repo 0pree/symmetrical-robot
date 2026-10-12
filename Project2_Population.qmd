@@ -1,0 +1,137 @@
+---
+title: "Project 2: Population Change in the 10 Most Populous States"
+author: "Supriya P."
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: flatly
+execute:
+  echo: true
+  warning: false
+---
+
+## Introduction
+
+This dataset was posted by Anastasiia Gmyrina in the Week 5 discussion. It comes from the U.S. Census Bureau's population estimates and covers the 10 most populous states in 2022, with population counts for 2020, 2021, and 2022. My goal is to see how each state's population changed over those two years.
+
+## Raw Data Structure
+
+```{r}
+library(tidyverse)
+library(knitr)
+
+raw <- read_csv(
+  "https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/census_top10_states_2022_untidy.csv",
+  show_col_types = FALSE
+)
+
+dim(raw)
+kable(raw)
+```
+
+The table has 10 rows (one per state) and 5 columns. It is wide because each year is a separate column, and the year is buried inside long headers like "April 1, 2020 (Estimates Base)" and "July 1, 2021". The column names also have spaces and mixed capitalization. There are no missing values.
+
+One detail worth noting is that the 2020 column is an April estimate, while 2021 and 2022 are July estimates. That means the first interval is about 15 months instead of 12, which slightly affects any year to year comparison.
+
+## Tidying the Data
+
+```{r}
+population <- raw %>%
+  rename(rank_2022 = Rank, state = `Geographic Area`) %>%
+  pivot_longer(
+    cols = -c(rank_2022, state),
+    names_to = "estimate_date",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(str_extract(estimate_date, "\\d{4}"))) %>%
+  select(state, rank_2022, year, estimate_date, population)
+
+kable(head(population, 6))
+```
+
+I renamed the columns to lowercase names without spaces, then reshaped the three date columns into rows so each row is one state and one year. To get a usable year, I pulled the four-digit number out of each header with `str_extract()`. I kept the original `estimate_date` text in its own column so the April versus July difference is not lost.
+
+```{r}
+nrow(population) == nrow(raw) * 3
+```
+
+The tidy table has 30 rows, which matches 10 states times 3 years, so no rows were lost in the reshape.
+
+## Analysis
+
+### Change from 2020 to 2022
+
+```{r}
+change <- population %>%
+  select(state, year, population) %>%
+  pivot_wider(names_from = year, values_from = population, names_prefix = "pop_") %>%
+  mutate(
+    change = pop_2022 - pop_2020,
+    pct_change = round(change / pop_2020 * 100, 2)
+  ) %>%
+  arrange(desc(pct_change))
+
+kable(
+  change,
+  format.args = list(big.mark = ","),
+  col.names = c("State", "2020", "2021", "2022", "Change", "Percent Change (%)")
+)
+```
+
+```{r}
+ggplot(change, aes(x = reorder(state, pct_change), y = pct_change, fill = pct_change > 0)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "firebrick"), guide = "none") +
+  labs(
+    title = "Population Change from 2020 to 2022",
+    x = NULL, y = "Percent Change (%)"
+  ) +
+  theme_minimal()
+```
+
+Six of the ten states lost population and four gained. Florida grew the most by percentage (3.28%), followed closely by Texas (3.03%), and Texas added the most people overall, about 884,000. New York lost the most by percentage (2.59%) and also the most people, about 524,000. California lost almost as many people (about 509,000), but because its population is so large, that was only a 1.29% drop.
+
+### Growth Pattern by Region
+
+```{r}
+change %>%
+  mutate(region = if_else(state %in% c("Texas", "Florida", "Georgia", "North Carolina"), "South", "Other")) %>%
+  group_by(region) %>%
+  summarize(
+    states = n(),
+    total_change = sum(change),
+    .groups = "drop"
+  ) %>%
+  kable(format.args = list(big.mark = ","), col.names = c("Region", "States", "Total Change"))
+```
+
+All four states that grew are in the South. Together they gained about 2.05 million people, while the other six states lost about 1.38 million. Across all ten states, the total population only grew by about 0.37%, so most of the movement was people shifting between states rather than overall growth.
+
+### Year by Year
+
+```{r}
+ggplot(population, aes(x = year, y = population / 1e6, color = state)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = c(2020, 2021, 2022)) +
+  labs(
+    title = "Population Estimates by State",
+    x = "Year", y = "Population (millions)", color = "State"
+  ) +
+  theme_minimal()
+```
+
+Because California and Texas are so much larger than the other states, this chart makes the changes in the smaller states hard to see, which is why the percent change chart above is more useful for comparing them.
+
+## Conclusions
+
+This was the simplest of the three datasets to tidy. The main step was pulling the year out of long column headers and reshaping the year columns into rows. The analysis shows a clear pattern: between 2020 and 2022, the large Southern states gained population while New York, Illinois, and California lost it. Since the 2020 estimate is from April and the others are from July, the first interval is a little longer, so these numbers slightly overstate change compared to a true two year window.
+
+A next step would be to add more recent Census estimates to see whether this shift continued after 2022, or to include all 50 states and look at domestic migration specifically.
+
+#### AI Citation
+
+Anthropic. (2026). Claude Opus 5.5 [Large language model]. https://claude.ai. Accessed October 2026.
