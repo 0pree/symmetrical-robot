@@ -1,0 +1,14 @@
+---
+title: "Week 7 Assignment Approach - Working with HTML and JSON"
+author: "Supriya P."
+format: html
+editor: visual
+---
+
+## Introduction (Approach)
+
+For this assignment, I chose three books on learning R and statistics: *R for Data Science* by Hadley Wickham, Mine Çetinkaya-Rundel, and Garrett Grolemund, *OpenIntro Statistics* by David Diez, Mine Çetinkaya-Rundel, and Christopher Barr, and *Hands-On Programming with R* by Garrett Grolemund. Two of the three have multiple authors, and Grolemund and Çetinkaya-Rundel each appear on more than one book. Along with the title and authors, I plan to record the edition, publication year, and publisher for each book.
+
+I will write both files by hand. In the HTML file, each book will be a row in a table. In the JSON file, each book will be an object, and I plan to store the authors as an array so that each author is a separate value. In the HTML table, the authors will most likely end up as a single text cell separated by commas, since a table cell does not have an obvious way to hold a list.
+
+In R, I plan to use rvest to read the HTML table and jsonlite to read the JSON file, then compare the two data frames with `identical()` and `all.equal()`. I expect they will not be identical at first. The authors column is the most likely difference, since it will be a list in one and a text string in the other, and the column types may also differ (for example, the year could load as a number from one file and as text from the other). I will look at how each file loads before deciding how to make the two match, and then check again to see if they are the same once the differences are resolved.
