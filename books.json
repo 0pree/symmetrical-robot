@@ -1,0 +1,23 @@
+[
+  {
+    "title": "R for Data Science",
+    "authors": ["Hadley Wickham", "Mine Çetinkaya-Rundel", "Garrett Grolemund"],
+    "edition": 2,
+    "year": 2023,
+    "publisher": "O'Reilly Media"
+  },
+  {
+    "title": "OpenIntro Statistics",
+    "authors": ["David Diez", "Mine Çetinkaya-Rundel", "Christopher Barr"],
+    "edition": 4,
+    "year": 2019,
+    "publisher": "OpenIntro"
+  },
+  {
+    "title": "Hands-On Programming with R",
+    "authors": ["Garrett Grolemund"],
+    "edition": 1,
+    "year": 2014,
+    "publisher": "O'Reilly Media"
+  }
+]
