@@ -1,0 +1,116 @@
+---
+title: "Week 7 Assignment: Working with HTML and JSON"
+author: "Supriya P."
+date: today
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: flatly
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## Introduction
+
+For this assignment, I chose three books on learning R and statistics: *R for Data Science*, *OpenIntro Statistics*, and *Hands-On Programming with R*. Two of the three have multiple authors, and two authors (Mine Çetinkaya-Rundel and Garrett Grolemund) each appear on more than one book. For each book, I recorded the title, authors, edition, publication year, and publisher.
+
+I wrote both data files by hand using Claude AI as a guide and saved them in my GitHub repository:
+
+- `books.html` with the data in an HTML table
+- `books.json` with the same data as a JSON array of book objects
+
+The goal is to load each file into its own data frame and see whether the two come out the same.
+
+## Loading the HTML File
+
+```{r}
+library(tidyverse)
+library(rvest)
+library(jsonlite)
+library(knitr)
+
+html_url <- "https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/books.html"
+
+books_html <- read_html(html_url) %>%
+  html_element("table") %>%
+  html_table()
+
+kable(books_html)
+str(books_html)
+```
+
+`read_html()` reads the page, `html_element("table")` finds the table, and `html_table()` turns it into a data frame, using the header row as the column names. Even though everything in an HTML file is text, `html_table()` guessed that the edition and year columns are numbers and converted them to integers. Because a table cell can only hold one value, the authors for each book are stored together in a single text string separated by commas.
+
+## Loading the JSON File
+
+```{r}
+json_url <- "https://raw.githubusercontent.com/0pree/symmetrical-robot/refs/heads/main/books.json"
+
+books_json <- fromJSON(json_url)
+
+books_json
+str(books_json)
+```
+
+`fromJSON()` converts the array of book objects into a data frame with one row per book. In the JSON file I wrote the edition and year as numbers without quotes, so they load as integers here too. The main difference is the authors column. In the JSON file each book's authors are stored as an array, so R loads that column as a list, where each row holds a vector of one to three names.
+
+## Comparing the Two Data Frames
+
+```{r}
+identical(books_html, books_json)
+all.equal(books_html, books_json)
+```
+
+The two data frames are not identical. `all.equal()` shows two reasons:
+
+- **Class:** `html_table()` returns a tibble, while `fromJSON()` returns a base R data frame.
+- **Authors:** the HTML version stores authors as one text string per book, while the JSON version stores them as a list.
+
+The titles, editions, years, and publishers all match so values are the same. The differences come from the way each format stores the data.
+
+## Making the Two Match
+
+To check that the content really is the same, I converted the JSON version to a tibble and combined each book's authors into one comma separated string, the same way they appear in the HTML table.
+
+```{r}
+books_json_flat <- books_json %>%
+  as_tibble() %>%
+  mutate(authors = map_chr(authors, ~ paste(.x, collapse = ", ")))
+
+identical(books_html, books_json_flat)
+```
+
+After these two changes, the data frames are identical.
+
+## One Row per Author
+
+Joining the authors into one string makes the two versions match but it isn't the most useful format for analysis. The JSON structure keeps each author as a separate value which makes it easy to reshape the data so each row is one book and one author.
+
+```{r}
+books_by_author <- books_json %>%
+  as_tibble() %>%
+  unnest_longer(authors) %>%
+  rename(author = authors)
+
+kable(books_by_author)
+
+books_by_author %>%
+  count(author, name = "books") %>%
+  arrange(desc(books)) %>%
+  kable()
+```
+
+This shows that Çetinkaya-Rundel and Grolemund each wrote two of the three books. Getting the same result from the HTML version would mean splitting the authors text on the commas first.
+
+## Conclusions
+
+Both files held the same information but they did not load into identical data frames. The values matched but the structure differed in two ways: the HTML table loaded as a tibble with authors stored as text and the JSON file loaded as a base data frame with authors stored as a list. Once I matched the class and the authors format, the two were identical.
+
+Writing the files by hand also demonstrated a difference between the formats. HTML tables allow a field with several values to be squeezed into one cell. On the other hand, JSON can nest a list inside a record, which keeps multiple authors separate and makes the data easier to reshape later.
+
+#### AI Citation
+
+Anthropic. (2026). Sonnet 5.5 [Large language model]. https://claude.ai. Accessed October 2026.
